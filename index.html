@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="fr" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accordeur de Guitare Précis - Web Audio</title>
+    <!-- Chargement de Tailwind CSS pour un design moderne et réactif -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Police Google Fonts Inter & JetBrains Mono pour l'affichage numérique -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                        mono: ['JetBrains Mono', 'monospace'],
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        /* Animation fluide pour l'aiguille de la jauge */
+        .needle-transition {
+            transition: transform 0.08s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.2s ease;
+        }
+        /* Effet de lueur quand la note est juste */
+        .in-tune-glow {
+            box-shadow: 0 0 25px rgba(16, 185, 129, 0.45);
+        }
+        /* Empêcher la sélection de texte sur les boutons tactiles */
+        .no-select {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col justify-between items-center p-4 sm:p-6 font-sans antialiased selection:bg-emerald-500 selection:text-white">
+
+    <!-- En-tête de l'application -->
+    <header class="w-full max-w-lg flex items-center justify-between pt-2 pb-4 border-b border-slate-800/80">
+        <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-950/50">
+                <!-- Icône Guitare / Diapason SVG -->
+                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-lg sm:text-xl font-bold tracking-tight text-white">GuitarTuner <span class="text-emerald-400">Pro</span></h1>
+                <p class="text-xs text-slate-400">Diapason A4 = 440 Hz</p>
+            </div>
+        </div>
+        
+        <!-- Indicateur d'état du microphone -->
+        <div id="status-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-xs font-medium text-slate-400">
+            <span id="status-dot" class="w-2 h-2 rounded-full bg-slate-600"></span>
+            <span id="status-text">Micro coupé</span>
+        </div>
+    </header>
+
+    <!-- Conteneur principal de l'accordeur -->
+    <main class="w-full max-w-lg my-auto py-6 flex flex-col gap-6">
+
+        <!-- Boîte de message d'erreur / information (remplace alert()) -->
+        <div id="message-box" class="hidden p-4 rounded-xl bg-rose-950/60 border border-rose-500/40 text-rose-200 text-sm flex items-start gap-3">
+            <svg class="w-5 h-5 text-rose-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div id="message-content" class="flex-1"></div>
+        </div>
+
+        <!-- Écran numérique principal -->
+        <section id="display-card" class="relative bg-slate-900/90 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl transition-all duration-300 flex flex-col items-center">
+            
+            <!-- Indication textuelle d'accordage (Trop bas / Accordé / Trop haut) -->
+            <div class="h-7 flex items-center justify-center mb-2">
+                <span id="tuning-hint" class="px-3 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-slate-800 text-slate-400 transition-colors">
+                    En attente de signal...
+                </span>
+            </div>
+
+            <!-- Affichage géant de la Note (Notation Internationale + Française) -->
+            <div class="flex flex-col items-center justify-center my-2">
+                <div class="flex items-baseline gap-2">
+                    <span id="note-name" class="text-7xl sm:text-8xl font-bold tracking-tighter text-slate-200 transition-colors">--</span>
+                    <span id="note-octave" class="text-3xl sm:text-4xl font-semibold text-slate-500"></span>
+                </div>
+                <div id="note-french" class="text-base sm:text-lg font-medium text-slate-400 mt-1 h-6">
+                    Note française : --
+                </div>
+            </div>
+
+            <!-- Affichage numérique de la fréquence (Hz) et de la déviation (Cents) -->
+            <div class="w-full grid grid-cols-2 gap-3 mt-4 pt-4 border-t border-slate-800/80">
+                <div class="bg-slate-950/70 rounded-2xl p-3 border border-slate-800/60 flex flex-col items-center">
+                    <span class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Fréquence</span>
+                    <div class="font-mono text-xl sm:text-2xl font-bold text-emerald-400 mt-0.5">
+                        <span id="frequency-display">0.0</span> <span class="text-xs font-normal text-slate-400">Hz</span>
+                    </div>
+                </div>
+                <div class="bg-slate-950/70 rounded-2xl p-3 border border-slate-800/60 flex flex-col items-center">
+                    <span class="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Déviation</span>
+                    <div class="font-mono text-xl sm:text-2xl font-bold text-slate-200 mt-0.5">
+                        <span id="cents-display">0</span> <span class="text-xs font-normal text-slate-400">cents</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Jauge visuelle linéaire haute précision (-50 cents à +50 cents) -->
+            <div class="w-full mt-7">
+                <div class="flex justify-between text-xs font-mono text-slate-500 mb-2 px-1">
+                    <span>-50 ♭</span>
+                    <span class="text-emerald-400 font-bold">0 (Juste)</span>
+                    <span>+50 ♯</span>
+                </div>
+
+                <!-- Piste de la jauge -->
+                <div class="relative w-full h-12 bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden flex items-center">
+                    <!-- Zone centrale verte de tolérance (±5 cents) -->
+                    <div class="absolute left-1/2 -translate-x-1/2 w-[10%] h-full bg-emerald-500/15 border-x border-emerald-500/40 z-0"></div>
+                    
+                    <!-- Graduations visuelles -->
+                    <div class="w-full flex justify-between items-center px-3 z-10 pointer-events-none">
+                        <span class="w-0.5 h-3 bg-slate-700"></span>
+                        <span class="w-0.5 h-2 bg-slate-800"></span>
+                        <span class="w-0.5 h-4 bg-slate-600"></span>
+                        <span class="w-0.5 h-2 bg-slate-800"></span>
+                        <span class="w-0.5 h-3 bg-slate-700"></span>
+                        <!-- Repère central exact -->
+                        <span class="w-1 h-7 bg-emerald-400 rounded-full shadow-[0_0_8px_#10b981]"></span>
+                        <span class="w-0.5 h-3 bg-slate-700"></span>
+                        <span class="w-0.5 h-2 bg-slate-800"></span>
+                        <span class="w-0.5 h-4 bg-slate-600"></span>
+                        <span class="w-0.5 h-2 bg-slate-800"></span>
+                        <span class="w-0.5 h-3 bg-slate-700"></span>
+                    </div>
+
+                    <!-- Aiguille / Curseur mobile -->
+                    <div id="tuner-needle" 
+                         style="left: 50%; transform: translateX(-50%);"
+                         class="needle-transition absolute top-1.5 bottom-1.5 w-2 rounded-full bg-slate-500 shadow-lg z-20 opacity-40">
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Repères des 6 cordes de guitare (Accordage Standard E A D G B E) -->
+        <section class="bg-slate-900/60 border border-slate-800/80 rounded-2xl p-4">
+            <div class="flex items-center justify-between mb-3 px-1">
+                <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Accordage Standard (6 Cordes)</h2>
+                <span class="text-[11px] text-slate-500">Grave → Aiguë</span>
+            </div>
+            
+            <div id="strings-container" class="grid grid-cols-6 gap-2">
+                <!-- Corde 6 : Mi grave (E2) -->
+                <button type="button" data-string="E2" data-freq="82.41" class="string-btn no-select flex flex-col items-center p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 transition-all">
+                    <span class="text-[10px] text-slate-500 font-semibold">6e</span>
+                    <span class="text-base sm:text-lg font-bold text-slate-200 mt-0.5">E2</span>
+                    <span class="text-[11px] text-slate-400">Mi2</span>
+                    <span class="text-[10px] font-mono text-slate-500 mt-1">82.4Hz</span>
+                </button>
+
+                <!-- Corde 5 : La (A2) -->
+                <button type="button" data-string="A2" data-freq="110.00" class="string-btn no-select flex flex-col items-center p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 transition-all">
+                    <span class="text-[10px] text-slate-500 font-semibold">5e</span>
+                    <span class="text-base sm:text-lg font-bold text-slate-200 mt-0.5">A2</span>
+                    <span class="text-[11px] text-slate-400">La2</span>
+                    <span class="text-[10px] font-mono text-slate-500 mt-1">110Hz</span>
+                </button>
+
+                <!-- Corde 4 : Ré (D3) -->
+                <button type="button" data-string="D3" data-freq="146.83" class="string-btn no-select flex flex-col items-center p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 transition-all">
+                    <span class="text-[10px] text-slate-500 font-semibold">4e</span>
+                    <span class="text-base sm:text-lg font-bold text-slate-200 mt-0.5">D3</span>
+                    <span class="text-[11px] text-slate-400">Ré3</span>
+                    <span class="text-[10px] font-mono text-slate-500 mt-1">146.8Hz</span>
+                </button>
+
+                <!-- Corde 3 : Sol (G3) -->
+                <button type="button" data-string="G3" data-freq="196.00" class="string-btn no-select flex flex-col items-center p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 transition-all">
+                    <span class="text-[10px] text-slate-500 font-semibold">3e</span>
+                    <span class="text-base sm:text-lg font-bold text-slate-200 mt-0.5">G3</span>
+                    <span class="text-[11px] text-slate-400">Sol3</span>
+                    <span class="text-[10px] font-mono text-slate-500 mt-1">196Hz</span>
+                </button>
+
+                <!-- Corde 2 : Si (B3) -->
+                <button type="button" data-string="B3" data-freq="246.94" class="string-btn no-select flex flex-col items-center p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 transition-all">
+                    <span class="text-[10px] text-slate-500 font-semibold">2e</span>
+                    <span class="text-base sm:text-lg font-bold text-slate-200 mt-0.5">B3</span>
+                    <span class="text-[11px] text-slate-400">Si3</span>
+                    <span class="text-[10px] font-mono text-slate-500 mt-1">246.9Hz</span>
+                </button>
+
+                <!-- Corde 1 : Mi aigu (E4) -->
+                <button type="button" data-string="E4" data-freq="329.63" class="string-btn no-select flex flex-col items-center p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-slate-600 transition-all">
+                    <span class="text-[10px] text-slate-500 font-semibold">1re</span>
+                    <span class="text-base sm:text-lg font-bold text-slate-200 mt-0.5">E4</span>
+                    <span class="text-[11px] text-slate-400">Mi4</span>
+                    <span class="text-[10px] font-mono text-slate-500 mt-1">329.6Hz</span>
+                </button>
+            </div>
+            <p class="text-[11px] text-center text-slate-500 mt-2.5">
+                Astuce : Cliquez sur une corde pour écouter sa note de référence.
+            </p>
+        </section>
+
+        <!-- Bouton principal Démarrer / Arrêter le microphone -->
+        <button id="toggle-mic-btn" type="button" class="no-select w-full py-4 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 active:scale-[0.99] text-white font-semibold text-base sm:text-lg shadow-lg shadow-emerald-950/60 transition-all flex items-center justify-center gap-3 cursor-pointer">
+            <svg id="mic-icon-on" class="w-6 h-6" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/>
+            </svg>
+            <svg id="mic-icon-off" class="w-6 h-6 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"/>
+            </svg>
+            <span id="toggle-mic-text">Démarrer le microphone</span>
+        </button>
+
+    </main>
+
+    <!-- Pied de page -->
+    <footer class="w-full max-w-lg text-center py-2 text-xs text-slate-500">
+        Traitement audio 100% local via Web Audio API • Aucune donnée enregistrée
+    </footer>
+
+    <script>
+        /**
+         * ============================================================================
+         * ACCORDEUR DE GUITARE NUMÉRIQUE - LOGIQUE WEB AUDIO & AUTOCORRÉLATION
+         * ============================================================================
+         */
+
+        // Correspondance des 12 demi-tons de la gamme chromatique (Notation Internationale & Française)
+        const NOTE_STRINGS_INT = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+        const NOTE_STRINGS_FR  = ["Do", "Do#", "Ré", "Ré#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"];
+        const A4_FREQUENCY = 440.0;
+
+        // Variables d'état Web Audio
+        let audioContext = null;
+        let analyser = null;
+        let mediaStream = null;
+        let rafId = null;
+        let isRunning = false;
+        let audioBuffer = null;
+
+        // Lissage des valeurs pour éviter les sauts brusques à l'écran
+        let smoothedFrequency = 0;
+        let silenceFrames = 0;
+
+        // Références aux éléments du DOM
+        const toggleMicBtn = document.getElementById('toggle-mic-btn');
+        const toggleMicText = document.getElementById('toggle-mic-text');
+        const micIconOn = document.getElementById('mic-icon-on');
+        const micIconOff = document.getElementById('mic-icon-off');
+        const statusBadge = document.getElementById('status-badge');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        
+        const displayCard = document.getElementById('display-card');
+        const tuningHint = document.getElementById('tuning-hint');
+        const noteNameEl = document.getElementById('note-name');
+        const noteOctaveEl = document.getElementById('note-octave');
+        const noteFrenchEl = document.getElementById('note-french');
+        const frequencyDisplay = document.getElementById('frequency-display');
+        const centsDisplay = document.getElementById('cents-display');
+        const tunerNeedle = document.getElementById('tuner-needle');
+        
+        const messageBox = document.getElementById('message-box');
+        const messageContent = document.getElementById('message-content');
+        const stringButtons = document.querySelectorAll('.string-btn');
+
+        /**
+         * Affiche un message d'erreur ou d'avertissement dans l'interface (sans alert())
+         */
+        function showMessage(text) {
+            messageContent.textContent = text;
+            messageBox.classList.remove('hidden');
+        }
+
+        function hideMessage() {
+            messageBox.classList.add('hidden');
+        }
+
+        /**
+         * Démarre ou arrête la capture du microphone
+         */
+        async function toggleMicrophone() {
+            if (isRunning) {
+                stopTuner();
+            } else {
+                await startTuner();
+            }
+        }
+
+        /**
+         * Initialise l'API Web Audio et demande l'autorisation du microphone
+         */
+        async function startTuner() {
+            hideMessage();
+
+            // Vérification de la compatibilité du navigateur et du contexte sécurisé (HTTPS / localhost)
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showMessage("Votre navigateur ne supporte pas l'accès au microphone ou la page n'est pas servie en HTTPS.");
+                return;
+            }
+
+            try {
+                // Demande d'accès au microphone avec désactivation des filtres vocaux pour préserver la pureté harmonique
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: false,
+                        autoGainControl: false,
+                        noiseSuppression: false
+                    }
+                });
+
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                audioContext = new AudioCtx();
+
+                // Création de la source audio et de l'analyseur FFT/Temporel
+                const source = audioContext.createMediaStreamSource(mediaStream);
+                analyser = audioContext.createAnalyser();
+                // Taille de buffer de 4096 échantillons pour une excellente résolution dans les fréquences graves (E2 = 82.4 Hz)
+                analyser.fftSize = 4096;
+                audioBuffer = new Float32Array(analyser.fftSize);
+
+                source.connect(analyser);
+
+                isRunning = true;
+                smoothedFrequency = 0;
+                updateUIState(true);
+                detectPitchLoop();
+
+            } catch (err) {
+                console.error("Erreur d'accès au microphone :", err);
+                if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+                    showMessage("Accès au microphone refusé. Veuillez autoriser le micro dans les paramètres de votre navigateur.");
+                } else if (err.name === 'NotFoundError') {
+                    showMessage("Aucun microphone détecté sur cet appareil.");
+                } else {
+                    showMessage("Impossible d'activer le microphone : " + err.message);
+                }
+            }
+        }
+
+        /**
+         * Arrête proprement le flux audio et réinitialise l'affichage
+         */
+        function stopTuner() {
+            isRunning = false;
+            if (rafId) {
+                cancelAnimationFrame(rafId);
+                rafId = null;
+            }
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            updateUIState(false);
+            resetDisplay();
+        }
+
+        /**
+         * Met à jour les boutons et badges d'état (Actif / Inactif)
+         */
+        function updateUIState(active) {
+            if (active) {
+                toggleMicBtn.classList.remove('bg-emerald-600', 'hover:bg-emerald-500');
+                toggleMicBtn.classList.add('bg-rose-600', 'hover:bg-rose-500', 'shadow-rose-950/60');
+                toggleMicText.textContent = "Arrêter le microphone";
+                micIconOn.classList.add('hidden');
+                micIconOff.classList.remove('hidden');
+
+                statusDot.classList.remove('bg-slate-600');
+                statusDot.classList.add('bg-emerald-400', 'animate-pulse');
+                statusText.textContent = "Écoute active";
+                statusText.classList.replace('text-slate-400', 'text-emerald-300');
+                tuningHint.textContent = "Jouez une corde...";
+            } else {
+                toggleMicBtn.classList.remove('bg-rose-600', 'hover:bg-rose-500', 'shadow-rose-950/60');
+                toggleMicBtn.classList.add('bg-emerald-600', 'hover:bg-emerald-500');
+                toggleMicText.textContent = "Démarrer le microphone";
+                micIconOn.classList.remove('hidden');
+                micIconOff.classList.add('hidden');
+
+                statusDot.classList.remove('bg-emerald-400', 'animate-pulse');
+                statusDot.classList.add('bg-slate-600');
+                statusText.textContent = "Micro coupé";
+                statusText.classList.replace('text-emerald-300', 'text-slate-400');
+                tuningHint.textContent = "En attente de signal...";
+            }
+        }
+
+        /**
+         * Réinitialise les valeurs numériques quand le micro est coupé ou silencieux
+         */
+        function resetDisplay() {
+            noteNameEl.textContent = "--";
+            noteNameEl.className = "text-7xl sm:text-8xl font-bold tracking-tighter text-slate-200 transition-colors";
+            noteOctaveEl.textContent = "";
+            noteFrenchEl.textContent = "Note française : --";
+            frequencyDisplay.textContent = "0.0";
+            centsDisplay.textContent = "0";
+            
+            tunerNeedle.style.left = "50%";
+            tunerNeedle.className = "needle-transition absolute top-1.5 bottom-1.5 w-2 rounded-full bg-slate-500 shadow-lg z-20 opacity-40";
+            displayCard.classList.remove('in-tune-glow', 'border-emerald-500/60');
+            
+            tuningHint.className = "px-3 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-slate-800 text-slate-400 transition-colors";
+            tuningHint.textContent = isRunning ? "Jouez une corde..." : "En attente de signal...";
+
+            highlightGuitarString(null);
+        }
+
+        /**
+         * Algorithme d'autocorrélation temporelle avec interpolation parabolique
+         * Détermine la fréquence fondamentale (en Hz) à partir d'un buffer d'échantillons audio.
+         */
+        function autoCorrelate(buffer, sampleRate) {
+            const size = buffer.length;
+            
+            // 1. Calcul de l'énergie RMS (Root Mean Square) pour ignorer le bruit de fond
+            let rms = 0;
+            for (let i = 0; i < size; i++) {
+                const val = buffer[i];
+                rms += val * val;
+            }
+            rms = Math.sqrt(rms / size);
+            
+            // Seuil minimal de volume sonore
+            if (rms < 0.012) {
+                return -1;
+            }
+
+            // 2. Découpage des bords silencieux pour optimiser le calcul
+            let r1 = 0, r2 = size - 1;
+            const threshold = 0.2;
+            for (let i = 0; i < size / 2; i++) {
+                if (Math.abs(buffer[i]) < threshold) { r1 = i; break; }
+            }
+            for (let i = 1; i < size / 2; i++) {
+                if (Math.abs(buffer[size - i]) < threshold) { r2 = size - i; break; }
+            }
+
+            const trimmedBuffer = buffer.slice(r1, r2);
+            const trimmedSize = trimmedBuffer.length;
+
+            // 3. Calcul de la fonction d'autocorrélation
+            const c = new Float32Array(trimmedSize);
+            for (let i = 0; i < trimmedSize; i++) {
+                let sum = 0;
+                for (let j = 0; j < trimmedSize - i; j++) {
+                    sum += trimmedBuffer[j] * trimmedBuffer[j + i];
+                }
+                c[i] = sum;
+            }
+
+            // 4. Recherche du premier creux suivi du pic principal (période fondamentale)
+            let d = 0;
+            while (d < trimmedSize - 1 && c[d] > c[d + 1]) {
+                d++;
+            }
+
+            let maxVal = -1;
+            let maxPos = -1;
+            for (let i = d; i < trimmedSize; i++) {
+                if (c[i] > maxVal) {
+                    maxVal = c[i];
+                    maxPos = i;
+                }
+            }
+
+            // Vérification de la qualité de corrélation (évite les bruits apériodiques)
+            if (maxPos <= 0 || maxVal / c[0] < 0.85) {
+                return -1;
+            }
+
+            // 5. Interpolation parabolique autour du pic pour une précision sub-échantillon
+            let T0 = maxPos;
+            if (maxPos > 0 && maxPos < trimmedSize - 1) {
+                const x1 = c[maxPos - 1];
+                const x2 = c[maxPos];
+                const x3 = c[maxPos + 1];
+                const a = (x1 + x3 - 2 * x2) / 2;
+                const b = (x3 - x1) / 2;
+                if (a !== 0) {
+                    T0 = maxPos - b / (2 * a);
+                }
+            }
+
+            const frequency = sampleRate / T0;
+
+            // Filtrage dans la plage utile d'une guitare (de 60 Hz à 1200 Hz)
+            if (frequency < 60 || frequency > 1200) {
+                return -1;
+            }
+
+            return frequency;
+        }
+
+        /**
+         * Convertit une fréquence (Hz) en numéro de note MIDI, nom de note et déviation en cents
+         */
+        function frequencyToNoteDetails(frequency) {
+            // Formule MIDI : n = 69 + 12 * log2(f / 440)
+            const noteNumFloat = 12 * (Math.log(frequency / A4_FREQUENCY) / Math.log(2)) + 69;
+            const midiNote = Math.round(noteNumFloat);
+            
+            // Écart en cents par rapport à la note juste (-50 à +50)
+            const cents = Math.round((noteNumFloat - midiNote) * 100);
+            
+            const noteIndex = ((midiNote % 12) + 12) % 12;
+            const octave = Math.floor(midiNote / 12) - 1;
+
+            const nameInt = NOTE_STRINGS_INT[noteIndex];
+            const nameFr = NOTE_STRINGS_FR[noteIndex];
+
+            return {
+                fullNameInt: `${nameInt}${octave}`,
+                nameInt,
+                nameFr: `${nameFr}${octave}`,
+                octave,
+                cents
+            };
+        }
+
+        /**
+         * Met en surbrillance la corde correspondante si la note détectée fait partie de l'accordage standard
+         */
+        function highlightGuitarString(detectedNoteFullName) {
+            stringButtons.forEach(btn => {
+                const stringNote = btn.getAttribute('data-string');
+                if (stringNote === detectedNoteFullName) {
+                    btn.classList.remove('bg-slate-950', 'border-slate-800');
+                    btn.classList.add('bg-emerald-950/70', 'border-emerald-500', 'ring-1', 'ring-emerald-500/50');
+                } else {
+                    btn.classList.add('bg-slate-950', 'border-slate-800');
+                    btn.classList.remove('bg-emerald-950/70', 'border-emerald-500', 'ring-1', 'ring-emerald-500/50');
+                }
+            });
+        }
+
+        /**
+         * Boucle d'analyse audio temps réel (60 FPS)
+         */
+        function detectPitchLoop() {
+            if (!isRunning) return;
+
+            analyser.getFloatTimeDomainData(audioBuffer);
+            const rawFreq = autoCorrelate(audioBuffer, audioContext.sampleRate);
+
+            if (rawFreq !== -1) {
+                silenceFrames = 0;
+
+                // Lissage exponentiel léger pour stabiliser l'affichage sans latence perceptible
+                if (smoothedFrequency === 0 || Math.abs(rawFreq - smoothedFrequency) > 15) {
+                    smoothedFrequency = rawFreq;
+                } else {
+                    smoothedFrequency = smoothedFrequency * 0.75 + rawFreq * 0.25;
+                }
+
+                const noteInfo = frequencyToNoteDetails(smoothedFrequency);
+                updateTunerDisplay(smoothedFrequency, noteInfo);
+            } else {
+                silenceFrames++;
+                // Réinitialise l'affichage après environ 1.2 seconde de silence
+                if (silenceFrames > 75) {
+                    smoothedFrequency = 0;
+                    resetDisplay();
+                }
+            }
+
+            rafId = requestAnimationFrame(detectPitchLoop);
+        }
+
+        /**
+         * Met à jour l'interface graphique avec la fréquence, la note, l'aiguille et les couleurs d'état
+         */
+        function updateTunerDisplay(freq, noteInfo) {
+            // Affichage numérique de la fréquence et des cents
+            frequencyDisplay.textContent = freq.toFixed(1);
+            const sign = noteInfo.cents > 0 ? "+" : "";
+            centsDisplay.textContent = `${sign}${noteInfo.cents}`;
+
+            // Affichage de la note
+            noteNameEl.textContent = noteInfo.nameInt;
+            noteOctaveEl.textContent = noteInfo.octave;
+            noteFrenchEl.textContent = `Note française : ${noteInfo.nameFr}`;
+
+            // Positionnement de l'aiguille (borné entre -50 et +50 cents -> 5% à 95% de largeur)
+            const clampedCents = Math.max(-50, Math.min(50, noteInfo.cents));
+            const percentage = 50 + (clampedCents / 50) * 45;
+            tunerNeedle.style.left = `${percentage}%`;
+
+            // Évaluation de la justesse (Tolérance de ±4 cents pour le vert "Accordé")
+            const isInTune = Math.abs(noteInfo.cents) <= 4;
+            const isTooLow = noteInfo.cents < -4;
+
+            if (isInTune) {
+                // ACCORDÉ (VERT)
+                noteNameEl.className = "text-7xl sm:text-8xl font-bold tracking-tighter text-emerald-400 transition-colors";
+                tunerNeedle.className = "needle-transition absolute top-1 bottom-1 w-2.5 rounded-full bg-emerald-400 shadow-[0_0_12px_#10b981] z-20 opacity-100";
+                displayCard.classList.add('in-tune-glow', 'border-emerald-500/60');
+                
+                tuningHint.className = "px-3 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-500/40";
+                tuningHint.textContent = "✓ Note accordée";
+            } else if (isTooLow) {
+                // TROP BAS (AMBRE / BLEU)
+                noteNameEl.className = "text-7xl sm:text-8xl font-bold tracking-tighter text-amber-400 transition-colors";
+                tunerNeedle.className = "needle-transition absolute top-1.5 bottom-1.5 w-2 rounded-full bg-amber-400 shadow-[0_0_10px_#fbbf24] z-20 opacity-100";
+                displayCard.classList.remove('in-tune-glow', 'border-emerald-500/60');
+
+                tuningHint.className = "px-3 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-amber-500/20 text-amber-300";
+                tuningHint.textContent = "♭ Trop bas (Tendez la corde)";
+            } else {
+                // TROP HAUT (ROSE / ROUGE)
+                noteNameEl.className = "text-7xl sm:text-8xl font-bold tracking-tighter text-rose-400 transition-colors";
+                tunerNeedle.className = "needle-transition absolute top-1.5 bottom-1.5 w-2 rounded-full bg-rose-400 shadow-[0_0_10px_#fb7185] z-20 opacity-100";
+                displayCard.classList.remove('in-tune-glow', 'border-emerald-500/60');
+
+                tuningHint.className = "px-3 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wider bg-rose-500/20 text-rose-300";
+                tuningHint.textContent = "♯ Trop haut (Détendez la corde)";
+            }
+
+            // Mise en valeur de la corde sur le panneau inférieur
+            highlightGuitarString(noteInfo.fullNameInt);
+        }
+
+        /**
+         * Génère une note de référence audible (diapason synthétique) lorsqu'on clique sur une des 6 cordes
+         */
+        function playReferenceTone(freq) {
+            try {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                const tempCtx = new AudioCtx();
+                const osc = tempCtx.createOscillator();
+                const gainNode = tempCtx.createGain();
+
+                // Onde triangulaire douce proche d'une corde pincée
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(freq, tempCtx.currentTime);
+
+                // Enveloppe sonore douce (attaque rapide, extinction progressive sur 1.5s)
+                gainNode.gain.setValueAtTime(0.001, tempCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.25, tempCtx.currentTime + 0.05);
+                gainNode.gain.exponentialRampToValueAtTime(0.0001, tempCtx.currentTime + 1.5);
+
+                osc.connect(gainNode);
+                gainNode.connect(tempCtx.destination);
+
+                osc.start();
+                osc.stop(tempCtx.currentTime + 1.55);
+
+                setTimeout(() => tempCtx.close(), 1600);
+            } catch (e) {
+                console.warn("Impossible de jouer le son de référence :", e);
+            }
+        }
+
+        // Écouteurs d'événements
+        toggleMicBtn.addEventListener('click', toggleMicrophone);
+
+        stringButtons.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const freq = parseFloat(btn.getAttribute('data-freq'));
+                if (!isNaN(freq)) {
+                    playReferenceTone(freq);
+                }
+            });
+        });
+    </script>
+</body>
+</html>
